@@ -1,565 +1,378 @@
 import os
-import re
+import io
 import json
-import uuid
 import base64
 from dataclasses import dataclass
-from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import Dict, Any, Optional, List
 
 import streamlit as st
-import numpy as np
-import pandas as pd
-import fitz  # PyMuPDF
-import faiss
-import tiktoken
 from dotenv import load_dotenv
+from pypdf import PdfReader
+
 from openai import OpenAI
 
-# ----------------------------
+# -----------------------------
 # Config
-# ----------------------------
+# -----------------------------
 load_dotenv()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+DEFAULT_MODEL = os.getenv("REPORT_MATE_MODEL", "gpt-4.1-mini")
 
-APP_TITLE = "리포트 메이트 (Report mate)"
-DATA_DIR = Path("data")
-PROJECTS_JSON = DATA_DIR / "projects.json"
-PROJECTS_DIR = DATA_DIR / "projects"
+st.set_page_config(
+    page_title="Report mate",
+    layout="wide",
+)
 
-EMBED_MODEL = "text-embedding-3-large"
-CHAT_MODEL = "gpt-4.1-mini"  # 비용/속도 밸런스(필요시 변경)
+# -----------------------------
+# Helpers
+# -----------------------------
+def center_title(text: str):
+    # Streamlit 상단을 "중앙 정렬"처럼 보이게 하는 간단한 CSS 트릭
+    st.markdown(
+        f"""
+        <style>
+          .rm-title {{
+            text-align: center;
+            font-size: 28px;
+            font-weight: 700;
+            padding: 6px 0 2px 0;
+          }}
+          .rm-sub {{
+            text-align: center;
+            opacity: 0.75;
+            margin-top: -6px;
+            margin-bottom: 10px;
+          }}
+        </style>
+        <div class="rm-title">{text}</div>
+        <div class="rm-sub">논문 자료 분석 · 학술 개요/초안 작성 보조</div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-# ----------------------------
-# Utilities
-# ----------------------------
-def ensure_dirs():
-    DATA_DIR.mkdir(exist_ok=True)
-    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
-    if not PROJECTS_JSON.exists():
-        PROJECTS_JSON.write_text(json.dumps({"projects": []}, ensure_ascii=False, indent=2), encoding="utf-8")
-
-def load_projects() -> Dict[str, Any]:
-    ensure_dirs()
-    return json.loads(PROJECTS_JSON.read_text(encoding="utf-8"))
-
-def save_projects(obj: Dict[str, Any]):
-    PROJECTS_JSON.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
-
-def slugify(name: str) -> str:
-    name = name.strip()
-    name = re.sub(r"\s+", "_", name)
-    name = re.sub(r"[^0-9a-zA-Z가-힣_()-]", "", name)
-    return name[:60] if len(name) > 60 else name
-
-def token_len(text: str, model: str = CHAT_MODEL) -> int:
-    # tiktoken은 모델별 encoding이 다를 수 있어 fallback 처리
-    try:
-        enc = tiktoken.encoding_for_model(model)
-    except Exception:
-        enc = tiktoken.get_encoding("cl100k_base")
-    return len(enc.encode(text))
-
-def chunk_text(text: str, max_tokens: int = 900, overlap: int = 120) -> List[str]:
-    # 간단한 토큰 기준 chunker
-    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
+def read_pdf_text(pdf_bytes: bytes, max_chars: int = 20000) -> str:
+    """PDF 텍스트 추출(간단 RAG 전처리). 긴 경우 앞부분만."""
+    reader = PdfReader(io.BytesIO(pdf_bytes))
     chunks = []
-    buf = ""
-    for p in paragraphs:
-        candidate = (buf + "\n\n" + p).strip() if buf else p
-        if token_len(candidate) <= max_tokens:
-            buf = candidate
-        else:
-            if buf:
-                chunks.append(buf)
-            # 너무 긴 단락은 문장 단위로 쪼갬
-            if token_len(p) > max_tokens:
-                sentences = re.split(r"(?<=[.!?。？！])\s+", p)
-                tmp = ""
-                for s in sentences:
-                    cand = (tmp + " " + s).strip() if tmp else s
-                    if token_len(cand) <= max_tokens:
-                        tmp = cand
-                    else:
-                        if tmp:
-                            chunks.append(tmp)
-                        tmp = s
-                if tmp:
-                    chunks.append(tmp)
-                buf = ""
-            else:
-                buf = p
-    if buf:
-        chunks.append(buf)
+    for i, page in enumerate(reader.pages[:30]):  # 과도한 페이지는 제한
+        try:
+            chunks.append(page.extract_text() or "")
+        except Exception:
+            chunks.append("")
+    text = "\n".join(chunks).strip()
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n\n[...텍스트가 길어 일부만 사용됨...]"
+    return text
 
-    # overlap(문자 기준 간단) — MVP용
-    if overlap > 0 and len(chunks) > 1:
-        out = [chunks[0]]
-        for i in range(1, len(chunks)):
-            prev = out[-1]
-            tail = prev[-overlap*4:]  # 대략치
-            out.append((tail + "\n\n" + chunks[i]).strip())
-        return out
-    return chunks
+def pdf_viewer_iframe(pdf_bytes: bytes, height: int = 780):
+    """업로드한 PDF를 좌측 패널에 표시(브라우저 내장 PDF 뷰어)."""
+    b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+    pdf_display = f"""
+        <iframe
+            src="data:application/pdf;base64,{b64}"
+            width="100%"
+            height="{height}"
+            style="border: 1px solid rgba(0,0,0,0.12); border-radius: 10px;"
+            type="application/pdf"
+        ></iframe>
+    """
+    st.markdown(pdf_display, unsafe_allow_html=True)
 
-def read_pdf_text(pdf_path: Path) -> Tuple[str, int]:
-    doc = fitz.open(pdf_path)
-    pages = doc.page_count
-    texts = []
-    for i in range(pages):
-        page = doc.load_page(i)
-        texts.append(page.get_text("text"))
-    doc.close()
-    return "\n".join(texts).strip(), pages
-
-def pdf_to_base64(pdf_path: Path) -> str:
-    b = pdf_path.read_bytes()
-    return base64.b64encode(b).decode("utf-8")
-
-# ----------------------------
-# OpenAI wrapper
-# ----------------------------
 @dataclass
-class ChunkRecord:
-    chunk_id: str
-    doc_id: str
-    doc_name: str
-    page_hint: str
-    text: str
+class GenerateParams:
+    topic: str
+    purpose: str
+    hypothesis: str
+    citation_style: str
+    writing_style: str
+    language: str
+    model: str
 
-class OA:
-    def __init__(self):
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY가 없습니다. .env에 설정하세요.")
-        self.client = OpenAI(api_key=api_key)
+def build_prompt(params: GenerateParams, pdf_text: str, bibliography: List[str]) -> str:
+    bib_block = "\n".join([f"- {b}" for b in bibliography]) if bibliography else "- (없음)"
+    return f"""
+당신은 연구 보조 AI입니다. 사용자가 입력한 주제/목적/가설과 제공된 원문(PDF 텍스트 발췌)을 바탕으로,
+학술적 개요와 초안을 생성하세요.
 
-    def embed_texts(self, texts: List[str]) -> np.ndarray:
-        # OpenAI embeddings: list[str] -> (n, d)
-        resp = self.client.embeddings.create(model=EMBED_MODEL, input=texts)
-        vecs = np.array([d.embedding for d in resp.data], dtype=np.float32)
-        return vecs
+요구사항:
+- 반드시 아래 섹션 구조로 "세부 개요"를 작성:
+  1) 서론
+  2) 이론적 배경
+  3) 연구방법
+  4) 결과(예상/가정 가능. 단, 실제 데이터가 없음을 명시)
+  5) 결론
+- 각 섹션에는 소제목(2~5개) + 각 소제목별 핵심 bullet(2~5개)을 포함
+- 이어서 "초안 텍스트"를 섹션 구조 그대로 작성 (과장 금지, 학술 문체)
+- 인용은 사용자가 고른 스타일({params.citation_style})을 따르되,
+  원문 출처가 불명확하면 (출처불명)으로 표시하고 과도한 단정은 피함
+- 언어: {params.language}
+- 문체/스타일: {params.writing_style}
+- 출력은 반드시 JSON 하나만 반환
 
-    def chat_json(self, system: str, user: str, schema_hint: str = "") -> Dict[str, Any]:
-        # JSON만 반환하도록 강제(프롬프트 방식)
-        prompt = f"""{user}
+JSON 스키마(반드시 준수):
+{{
+  "outline": {{
+    "서론": [{{"title": "...", "bullets": ["...", "..."]}}],
+    "이론적 배경": [{{"title": "...", "bullets": ["...", "..."]}}],
+    "연구방법": [{{"title": "...", "bullets": ["...", "..."]}}],
+    "결과": [{{"title": "...", "bullets": ["...", "..."]}}],
+    "결론": [{{"title": "...", "bullets": ["...", "..."]}}]
+  }},
+  "draft": {{
+    "서론": "...",
+    "이론적 배경": "...",
+    "연구방법": "...",
+    "결과": "...",
+    "결론": "..."
+  }},
+  "bibliography_suggestions": ["...", "..."]
+}}
 
-반드시 JSON만 출력해. 다른 텍스트는 출력하지 마.
-{schema_hint}
-"""
-        resp = self.client.chat.completions.create(
-            model=CHAT_MODEL,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.2,
+사용자 입력:
+- 주제: {params.topic}
+- 연구 목적: {params.purpose}
+- 가설: {params.hypothesis}
+
+사용자 참고문헌(있다면 우선 활용):
+{bib_block}
+
+PDF 텍스트(발췌):
+\"\"\"
+{pdf_text}
+\"\"\"
+""".strip()
+
+def call_openai_json(prompt: str, model: str) -> Dict[str, Any]:
+    """
+    Responses API/Chat 계열은 계속 진화하므로,
+    여기서는 가장 호환성 높은 'JSON만 출력하라' 방식 + 파싱으로 안전하게 처리합니다.
+    """
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY가 설정되지 않았습니다. .env를 확인하세요.")
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+    # (권장) Responses API 사용: platform 문서에서 추천 :contentReference[oaicite:1]{index=1}
+    # SDK 버전에 따라 필드명이 조금씩 다를 수 있어, 실패 시 Chat Completions로 폴백합니다.
+    try:
+        resp = client.responses.create(
+            model=model,
+            input=prompt,
         )
-        content = resp.choices[0].message.content.strip()
-        # 안전한 JSON 파싱(앞뒤 잡텍스트 제거 시도)
-        m = re.search(r"\{.*\}", content, flags=re.S)
-        if not m:
-            raise ValueError("모델 출력에서 JSON을 찾지 못했습니다:\n" + content)
-        return json.loads(m.group(0))
-
-    def chat_text(self, system: str, user: str) -> str:
-        resp = self.client.chat.completions.create(
-            model=CHAT_MODEL,
+        text = resp.output_text
+    except Exception:
+        # 폴백: Chat Completions :contentReference[oaicite:2]{index=2}
+        resp = client.chat.completions.create(
+            model=model,
             messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
+                {"role": "system", "content": "You are a helpful research assistant. Output JSON only."},
+                {"role": "user", "content": prompt},
             ],
             temperature=0.4,
         )
-        return resp.choices[0].message.content.strip()
+        text = resp.choices[0].message.content or ""
 
-# ----------------------------
-# Vector store (FAISS)
-# ----------------------------
-class VectorStore:
-    def __init__(self, dim: int, index_path: Path, meta_path: Path):
-        self.dim = dim
-        self.index_path = index_path
-        self.meta_path = meta_path
-        self.index = faiss.IndexFlatIP(dim)  # cosine 유사도는 정규화로 처리
-        self.meta: List[ChunkRecord] = []
+    # JSON 파싱(모델이 코드펜스를 섞는 경우 제거)
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```", 2)[1] if "```" in text else text
+        text = text.replace("json", "", 1).strip()
 
-        if self.index_path.exists() and self.meta_path.exists():
-            self.index = faiss.read_index(str(self.index_path))
-            meta_raw = json.loads(self.meta_path.read_text(encoding="utf-8"))
-            self.meta = [ChunkRecord(**r) for r in meta_raw]
+    return json.loads(text)
 
-    def _normalize(self, x: np.ndarray) -> np.ndarray:
-        n = np.linalg.norm(x, axis=1, keepdims=True) + 1e-12
-        return x / n
+def init_session():
+    st.session_state.setdefault("topic", "")
+    st.session_state.setdefault("purpose", "")
+    st.session_state.setdefault("hypothesis", "")
+    st.session_state.setdefault("pdf_bytes", None)
+    st.session_state.setdefault("pdf_text", "")
+    st.session_state.setdefault("outline_json", None)
+    st.session_state.setdefault("draft_json", None)
+    st.session_state.setdefault("bib_items", [])
+    st.session_state.setdefault("progress", 0)
 
-    def add(self, vecs: np.ndarray, records: List[ChunkRecord]):
-        vecs = self._normalize(vecs.astype(np.float32))
-        self.index.add(vecs)
-        self.meta.extend(records)
+init_session()
 
-    def save(self):
-        faiss.write_index(self.index, str(self.index_path))
-        raw = [r.__dict__ for r in self.meta]
-        self.meta_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+# -----------------------------
+# UI: Header (Top center title)
+# -----------------------------
+center_title("리포트 메이트 (Report mate)")
 
-    def search(self, qvec: np.ndarray, k: int = 8) -> List[ChunkRecord]:
-        qvec = qvec.astype(np.float32)
-        qvec = qvec / (np.linalg.norm(qvec, axis=1, keepdims=True) + 1e-12)
-        D, I = self.index.search(qvec, k)
-        hits = []
-        for idx in I[0]:
-            if idx < 0 or idx >= len(self.meta):
-                continue
-            hits.append(self.meta[idx])
-        return hits
+# -----------------------------
+# Sidebar: Bibliography + Styles
+# -----------------------------
+with st.sidebar:
+    st.header("설정")
+    st.caption("참고문헌 리스트 / 양식 / 스타일 변경")
 
-# ----------------------------
-# App state helpers
-# ----------------------------
-def get_project_dir(project_id: str) -> Path:
-    d = PROJECTS_DIR / project_id
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "docs").mkdir(exist_ok=True)
-    return d
-
-def project_files(project_id: str) -> List[Path]:
-    d = get_project_dir(project_id) / "docs"
-    return sorted(d.glob("*.pdf"))
-
-def get_store_paths(project_id: str) -> Tuple[Path, Path]:
-    d = get_project_dir(project_id)
-    return d / "faiss.index", d / "chunks.json"
-
-# ----------------------------
-# Core features
-# ----------------------------
-SYS_RESEARCH_ASSISTANT = (
-    "당신은 학술 논문 교정 전문가이자 연구 방법론 컨설턴트다. "
-    "사용자가 제시한 연구 주제에 맞춰 근거 중심으로 요약하고, 논리 구조를 엄밀하게 제안한다. "
-    "확실한 근거가 부족하면 '추가 자료 필요'를 명시한다. "
-    "인용은 (DocID/DocName, ChunkID)로 출처를 남긴다."
-)
-
-def build_kp_extraction_prompt(topic: str, retrieved: List[ChunkRecord]) -> str:
-    ctx = "\n\n".join(
-        [f"[{r.doc_name} | chunk={r.chunk_id}] {r.text[:1800]}" for r in retrieved]
-    )
-    return f"""
-연구 주제: {topic}
-
-아래는 참고문헌에서 검색된 근거 발췌다.
-각 발췌를 읽고, 연구 주제와 관련된 핵심 주장/결과/데이터를 추출해 카테고리별로 분류해줘.
-
-출력 JSON 스키마:
-{{
-  "categories": [
-    {{
-      "name": "카테고리명(예: 이론/방법/결과/한계/변수/데이터셋 등)",
-      "items": [
-        {{
-          "claim": "핵심 주장/결과 요약(1~2문장)",
-          "evidence": "근거가 되는 문장/수치 요약",
-          "source": {{
-            "doc_name": "...",
-            "chunk_id": "..."
-          }},
-          "notes": "추가 해석/주의점(없으면 빈 문자열)"
-        }}
-      ]
-    }}
-  ]
-}}
-
-근거 발췌:
-{ctx}
-"""
-
-def build_outline_prompt(topic: str, purpose: str, hypothesis: str, extracted_json: Dict[str, Any]) -> str:
-    return f"""
-연구 주제: {topic}
-연구 목적: {purpose}
-가설: {hypothesis}
-
-아래는 참고자료에서 뽑은 핵심 근거/분류 결과야(JSON).
-이 근거들을 바탕으로 '서론-이론적 배경-연구 방법-결과-결론' 구조의 세부 개요를 작성해줘.
-각 섹션마다:
-- 핵심 논지 bullet
-- 섹션에 들어갈 대표 문장(학술적 문체 1~2개)
-- 해당 문장에 연결되는 출처(doc_name, chunk_id)
-- 근거 부족이면 '추가 자료 필요' 표시
-
-분량은 너무 길지 않게(섹션당 6~10 bullet).
-
-근거 JSON:
-{json.dumps(extracted_json, ensure_ascii=False, indent=2)}
-"""
-
-def build_rewrite_prompt(memo: str, citation_style: str, retrieved: List[ChunkRecord]) -> str:
-    ctx = "\n\n".join([f"[{r.doc_name} | chunk={r.chunk_id}] {r.text[:1600]}" for r in retrieved])
-    return f"""
-사용자 메모(평어/구어체 가능):
-{memo}
-
-요구사항:
-1) 메모를 학술 논문 문체로 교정(전문 용어/논리 연결 강화)
-2) 메모 속 주장 중, 아래 근거 발췌로 뒷받침 가능한 부분은 인용을 붙여줘
-3) 각주는 {citation_style} 스타일로, 문장 끝에 [^n] 형태로 달고, 하단에 각주 목록을 만들어줘
-4) 근거가 없으면 '추가 자료 필요'라고 표시
-
-근거 발췌:
-{ctx}
-
-출력 형식:
-- 교정된 본문(마크다운)
-- 각주 목록(마크다운, [^1]: ...)
-
-주의: 실제 서지정보(저자/연도/제목)를 자동으로 확정할 수 없으면 doc_name 기반으로 임시 표기하고,
-사용자가 DOI/서지정보를 채우도록 안내해.
-"""
-
-# ----------------------------
-# Streamlit UI
-# ----------------------------
-def main():
-    st.set_page_config(page_title=APP_TITLE, layout="wide")
-    st.title(APP_TITLE)
-
-    ensure_dirs()
-    projects_obj = load_projects()
-
-    # Sidebar: global settings
-    st.sidebar.header("설정")
-    citation_style = st.sidebar.selectbox(
-        "각주/인용 스타일",
-        ["APA (임시)", "MLA (임시)", "Chicago (임시)", "IEEE (임시)"],
-        index=0
-    )
-    top_k = st.sidebar.slider("검색 근거 개수(K)", 3, 15, 8)
-
-    st.sidebar.divider()
-    st.sidebar.caption("참고: MVP에서는 PDF의 서지정보 자동 추출이 제한적이라 doc_name 기반 임시 인용을 사용합니다.")
-
-    # Main: project controls (상단: 새프로젝트 만들기, 주제 입력창) :contentReference[oaicite:6]{index=6}
-    colA, colB, colC = st.columns([1.4, 1.2, 1.4], gap="large")
-
-    with colA:
-        st.subheader("프로젝트")
-        existing = projects_obj["projects"]
-        proj_names = ["(새 프로젝트)"] + [p["name"] for p in existing]
-        choice = st.selectbox("선택", proj_names, index=0)
-
-        new_name = ""
-        if choice == "(새 프로젝트)":
-            new_name = st.text_input("새 프로젝트 이름", value="")
-            if st.button("새프로젝트 만들기"):
-                if not new_name.strip():
-                    st.warning("프로젝트 이름을 입력해줘.")
-                else:
-                    project_id = str(uuid.uuid4())[:8]
-                    p = {"id": project_id, "name": new_name.strip(), "topic": "", "created_at": pd.Timestamp.now().isoformat()}
-                    projects_obj["projects"].insert(0, p)
-                    save_projects(projects_obj)
-                    st.success("프로젝트 생성 완료! 왼쪽에서 선택해줘.")
-                    st.rerun()
-
-    # Determine active project
-    active_project = None
-    if choice != "(새 프로젝트)":
-        active_project = next((p for p in existing if p["name"] == choice), None)
-
-    with colB:
-        st.subheader("연구 주제")
-        if active_project:
-            topic = st.text_input("주제 입력", value=active_project.get("topic", ""))
-            if st.button("주제 저장"):
-                active_project["topic"] = topic
-                save_projects(projects_obj)
-                st.success("저장 완료")
-        else:
-            st.info("프로젝트를 먼저 선택/생성해줘.")
-
-    with colC:
-        st.subheader("자료 업로드 (PDF)")  # 중앙 : 자료 업로드 :contentReference[oaicite:7]{index=7}
-        if active_project:
-            uploads = st.file_uploader("여러 PDF 업로드", type=["pdf"], accept_multiple_files=True)
-            if uploads:
-                docs_dir = get_project_dir(active_project["id"]) / "docs"
-                saved = 0
-                for uf in uploads:
-                    out = docs_dir / f"{slugify(Path(uf.name).stem)}.pdf"
-                    out.write_bytes(uf.read())
-                    saved += 1
-                st.success(f"{saved}개 저장 완료")
-        else:
-            st.info("프로젝트를 먼저 선택/생성해줘.")
+    citation_style = st.selectbox("인용 스타일", ["APA", "MLA", "Chicago", "IEEE"], index=0)
+    writing_style = st.selectbox("문체", ["학술적(기본)", "간결", "서술적", "비평적"], index=0)
+    language = st.selectbox("언어", ["한국어", "English"], index=0)
+    model = st.text_input("모델", value=DEFAULT_MODEL)
 
     st.divider()
 
-    if not active_project:
-        st.stop()
+    st.subheader("참고문헌 리스트")
+    new_bib = st.text_input("항목 추가", placeholder="예: Author, A. (2023). Title. Journal...")
+    col_add, col_clear = st.columns([1, 1])
+    with col_add:
+        if st.button("추가", use_container_width=True) and new_bib.strip():
+            st.session_state["bib_items"].append(new_bib.strip())
+            st.rerun()
+    with col_clear:
+        if st.button("비우기", use_container_width=True):
+            st.session_state["bib_items"] = []
+            st.rerun()
 
-    # Main area: bottom list + progress (하단 : 논문 리스트/진행률) :contentReference[oaicite:8]{index=8}
-    docs = project_files(active_project["id"])
-    left, right = st.columns([1.05, 1.25], gap="large")
+    if st.session_state["bib_items"]:
+        for i, b in enumerate(st.session_state["bib_items"], start=1):
+            st.write(f"{i}. {b}")
 
-    with left:
-        st.subheader("논문 리스트 / 원문 보기")
-        if not docs:
-            st.warning("PDF를 업로드해줘.")
+# -----------------------------
+# Top: Topic input row
+# -----------------------------
+st.markdown("### 주제 입력")
+top_c1, top_c2, top_c3 = st.columns([2, 2, 2])
+with top_c1:
+    st.session_state["topic"] = st.text_input("주제", value=st.session_state["topic"], placeholder="연구 주제를 입력하세요")
+with top_c2:
+    st.session_state["purpose"] = st.text_input("연구 목적", value=st.session_state["purpose"], placeholder="연구 목적을 입력하세요")
+with top_c3:
+    st.session_state["hypothesis"] = st.text_input("가설", value=st.session_state["hypothesis"], placeholder="가설을 입력하세요")
+
+st.markdown("---")
+
+# -----------------------------
+# Center: Upload area
+# -----------------------------
+st.markdown("### 자료 업로드")
+uploaded = st.file_uploader("인용 원문 소스(PDF)를 업로드하세요", type=["pdf"], accept_multiple_files=False)
+if uploaded is not None:
+    st.session_state["pdf_bytes"] = uploaded.read()
+    st.session_state["pdf_text"] = ""  # 새 업로드면 텍스트 재추출
+    st.success("PDF 업로드 완료")
+
+# -----------------------------
+# Action buttons + Progress (Bottom)
+# -----------------------------
+action_c1, action_c2, action_c3 = st.columns([1.2, 1.2, 3.6])
+
+with action_c1:
+    gen = st.button("개요/초안 생성", type="primary", use_container_width=True)
+with action_c2:
+    reset = st.button("초기화", use_container_width=True)
+with action_c3:
+    st.session_state["progress"] = st.slider("진행률", 0, 100, int(st.session_state["progress"]), 1)
+
+if reset:
+    for k in ["topic", "purpose", "hypothesis", "pdf_bytes", "pdf_text", "outline_json", "draft_json", "progress"]:
+        st.session_state[k] = "" if k in ["topic", "purpose", "hypothesis", "pdf_text"] else None
+    st.session_state["bib_items"] = []
+    st.session_state["progress"] = 0
+    st.rerun()
+
+# -----------------------------
+# Main 2-split: Left PDF, Right AI output
+# -----------------------------
+left, right = st.columns([1, 1], gap="large")
+
+with left:
+    st.subheader("인용된 원문 소스 (PDF)")
+    if st.session_state["pdf_bytes"]:
+        pdf_viewer_iframe(st.session_state["pdf_bytes"], height=820)
+    else:
+        st.info("좌측에 표시할 PDF가 아직 없습니다. 위에서 PDF를 업로드하세요.")
+
+with right:
+    st.subheader("AI 제안: 논리 구조 및 초안")
+    tabs = st.tabs(["개요", "초안", "참고문헌 제안", "JSON 원본"])
+
+    if gen:
+        # 진행률을 "아래"에서 보여주고 싶으면 slider 대신 progress bar를 써도 됩니다.
+        st.session_state["progress"] = 5
+
+        if not st.session_state["topic"].strip():
+            st.error("주제를 입력하세요.")
+        elif not st.session_state["purpose"].strip():
+            st.error("연구 목적을 입력하세요.")
+        elif not st.session_state["hypothesis"].strip():
+            st.error("가설을 입력하세요.")
+        elif not st.session_state["pdf_bytes"]:
+            st.error("PDF를 업로드하세요.")
         else:
-            doc_labels = [d.name for d in docs]
-            selected = st.selectbox("원문 선택", doc_labels, index=0)
-            sel_path = next(d for d in docs if d.name == selected)
+            try:
+                st.session_state["progress"] = 20
+                if not st.session_state["pdf_text"]:
+                    st.session_state["pdf_text"] = read_pdf_text(st.session_state["pdf_bytes"])
+                st.session_state["progress"] = 45
 
-            # PDF preview (간단 iframe)
-            b64 = pdf_to_base64(sel_path)
-            pdf_display = f"""
-            <iframe src="data:application/pdf;base64,{b64}" width="100%" height="720" type="application/pdf"></iframe>
-            """
-            st.markdown(pdf_display, unsafe_allow_html=True)
+                params = GenerateParams(
+                    topic=st.session_state["topic"].strip(),
+                    purpose=st.session_state["purpose"].strip(),
+                    hypothesis=st.session_state["hypothesis"].strip(),
+                    citation_style=citation_style,
+                    writing_style=writing_style,
+                    language=language,
+                    model=model.strip() or DEFAULT_MODEL,
+                )
+                prompt = build_prompt(params, st.session_state["pdf_text"], st.session_state["bib_items"])
+                st.session_state["progress"] = 65
 
-            st.download_button("선택 PDF 다운로드", data=sel_path.read_bytes(), file_name=sel_path.name)
+                result = call_openai_json(prompt=prompt, model=params.model)
+                st.session_state["outline_json"] = result.get("outline")
+                st.session_state["draft_json"] = result.get("draft")
+                st.session_state["bib_suggestions"] = result.get("bibliography_suggestions", [])
+                st.session_state["raw_json"] = result
+                st.session_state["progress"] = 100
+                st.success("생성 완료!")
+            except json.JSONDecodeError:
+                st.session_state["progress"] = 0
+                st.error("모델 출력이 JSON 형식이 아니어서 파싱에 실패했습니다. (모델/프롬프트를 조정해 보세요)")
+            except Exception as e:
+                st.session_state["progress"] = 0
+                st.error(f"오류: {e}")
 
-    with right:
-        st.subheader("AI 작업 공간")
-        topic = active_project.get("topic", "").strip()
-        if not topic:
-            st.warning("연구 주제를 먼저 저장해줘.")
-            st.stop()
+    outline = st.session_state.get("outline_json")
+    draft = st.session_state.get("draft_json")
+    bib_suggestions = st.session_state.get("bib_suggestions", [])
 
-        # Load/Open store
-        oa = OA()
-
-        # Initialize store (need dim)
-        # dim은 첫 임베딩 결과로 확정(없으면 더미로 시작했다가 생성)
-        index_path, meta_path = get_store_paths(active_project["id"])
-        dim = None
-        if index_path.exists() and meta_path.exists():
-            # 임시로 meta의 임베딩 dim을 알 수 없어서, 첫 쿼리 임베딩으로 dim 맞춰 재로딩 방식 대신
-            # Index를 그대로 읽고 dim은 index.d로 가져옴
-            idx = faiss.read_index(str(index_path))
-            dim = idx.d
+    with tabs[0]:
+        if outline:
+            for section, items in outline.items():
+                st.markdown(f"#### {section}")
+                for it in items:
+                    st.markdown(f"- **{it.get('title','')}**")
+                    bullets = it.get("bullets", [])
+                    for b in bullets:
+                        st.markdown(f"  - {b}")
         else:
-            # 기본 dim: text-embedding-3-large는 보통 3072지만, 확실히 하려면 첫 embed로 확인
-            dim = 3072
+            st.caption("아직 생성된 개요가 없습니다.")
 
-        store = VectorStore(dim=dim, index_path=index_path, meta_path=meta_path)
+    with tabs[1]:
+        if draft:
+            for section, text in draft.items():
+                st.markdown(f"#### {section}")
+                st.text_area(label=f"{section} 초안", value=text, height=180)
+        else:
+            st.caption("아직 생성된 초안이 없습니다.")
 
-        # Progress indicators
-        total_docs = len(docs)
-        indexed_chunks = len(store.meta)
-        st.caption(f"업로드 논문: {total_docs}개 | 인덱싱된 청크: {indexed_chunks}개")
+    with tabs[2]:
+        if bib_suggestions:
+            st.write("AI가 제안한 참고문헌(초안):")
+            for b in bib_suggestions:
+                st.markdown(f"- {b}")
+        else:
+            st.caption("아직 제안된 참고문헌이 없습니다.")
 
-        # Controls
-        tab1, tab2, tab3 = st.tabs(["기능1: 핵심내용/데이터 추출", "기능2: 세부 개요 작성", "기능3: 메모 교정 + 각주"])
+    with tabs[3]:
+        raw = st.session_state.get("raw_json")
+        if raw:
+            st.json(raw)
+        else:
+            st.caption("아직 JSON 원본이 없습니다.")
 
-        # ---- Feature 1
-        with tab1:
-            st.write("업로드한 논문에서 주제 관련 핵심 내용/데이터를 추출하고 카테고리별로 분류합니다. :contentReference[oaicite:9]{index=9}")
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                if st.button("1) PDF 인덱싱(처음 1회 권장)"):
-                    if not docs:
-                        st.warning("PDF가 없습니다.")
-                    else:
-                        prog = st.progress(0, text="PDF 텍스트 추출/청크/임베딩 중...")
-                        all_records: List[ChunkRecord] = []
-                        all_texts: List[str] = []
-
-                        for i, pdf in enumerate(docs):
-                            text, pages = read_pdf_text(pdf)
-                            chunks = chunk_text(text)
-                            doc_id = pdf.stem
-                            for ci, ch in enumerate(chunks):
-                                chunk_id = f"{doc_id}_c{ci:04d}"
-                                rec = ChunkRecord(
-                                    chunk_id=chunk_id,
-                                    doc_id=doc_id,
-                                    doc_name=pdf.name,
-                                    page_hint=f"{pages} pages",
-                                    text=ch
-                                )
-                                all_records.append(rec)
-                                all_texts.append(ch)
-
-                            prog.progress((i + 1) / max(1, len(docs)), text=f"처리중: {pdf.name}")
-
-                        # batch embed
-                        if all_texts:
-                            # 너무 길면 배치로 나눔
-                            B = 64
-                            vec_list = []
-                            for j in range(0, len(all_texts), B):
-                                vec_list.append(oa.embed_texts(all_texts[j:j+B]))
-                            vecs = np.vstack(vec_list)
-                            store.add(vecs, all_records)
-                            store.save()
-                            st.success(f"인덱싱 완료: {len(all_records)} chunks 추가")
-                        else:
-                            st.warning("추출된 텍스트가 없습니다.")
-                        prog.empty()
-
-            with col2:
-                query = st.text_input("빠른 검색(주제/키워드)", value=topic)
-                if st.button("2) 주제 기반 핵심내용 추출/분류"):
-                    if len(store.meta) == 0:
-                        st.warning("먼저 'PDF 인덱싱'을 수행해줘.")
-                    else:
-                        qvec = oa.embed_texts([query])
-                        hits = store.search(qvec, k=top_k)
-
-                        schema = "JSON only. categories: list of {name, items:[{claim,evidence,source:{doc_name,chunk_id},notes}]}"
-                        payload = oa.chat_json(
-                            system=SYS_RESEARCH_ASSISTANT,
-                            user=build_kp_extraction_prompt(topic=topic, retrieved=hits),
-                            schema_hint=schema
-                        )
-                        st.session_state["extracted"] = payload
-                        st.success("추출/분류 완료")
-                        st.json(payload)
-
-        # ---- Feature 2
-        with tab2:
-            st.write("연구 목적/가설을 입력하면 '서론-이론적 배경-연구 방법-결과-결론' 세부 개요를 생성합니다. :contentReference[oaicite:10]{index=10}")
-            purpose = st.text_area("연구 목적", height=80, placeholder="예) OO 이론을 바탕으로 XX가 YY에 미치는 영향을 검증")
-            hypothesis = st.text_area("가설", height=80, placeholder="예) H1: X가 증가할수록 Y는 증가한다.")
-            if st.button("세부 개요 생성"):
-                extracted = st.session_state.get("extracted")
-                if not extracted:
-                    st.warning("먼저 기능1에서 핵심내용 추출/분류를 수행해줘.")
-                elif not purpose.strip() or not hypothesis.strip():
-                    st.warning("연구 목적과 가설을 입력해줘.")
-                else:
-                    outline_md = oa.chat_text(
-                        system=SYS_RESEARCH_ASSISTANT,
-                        user=build_outline_prompt(topic, purpose, hypothesis, extracted)
-                    )
-                    st.session_state["outline"] = outline_md
-                    st.success("개요 생성 완료")
-                    st.markdown(outline_md)
-
-        # ---- Feature 3
-        with tab3:
-            st.write("평어 메모를 학술 문체로 교정하고, 근거가 있는 주장에는 각주를 자동 생성합니다. :contentReference[oaicite:11]{index=11}")
-            memo = st.text_area("내 메모 붙여넣기", height=180, placeholder="예) 이 논문은 대체로 A가 중요하다고 말한다...")
-            if st.button("메모 교정 + 각주 생성"):
-                if len(store.meta) == 0:
-                    st.warning("먼저 'PDF 인덱싱'을 수행해줘.")
-                elif not memo.strip():
-                    st.warning("메모를 입력해줘.")
-                else:
-                    qvec = oa.embed_texts([memo + "\n\n" + topic])
-                    hits = store.search(qvec, k=top_k)
-
-                    rewritten = oa.chat_text(
-                        system=SYS_RESEARCH_ASSISTANT,
-                        user=build_rewrite_prompt(memo, citation_style, hits)
-                    )
-                    st.session_state["rewrite"] = rewritten
-                    st.success("교정/각주 생성 완료")
-                    st.markdown(rewritten)
-
-    st.caption("MVP: PDF 텍스트 기반(표/그림 OCR, 정확한 서지정보 자동완성은 다음 단계에서 확장 권장).")
-
-if __name__ == "__main__":
-    main()
+# -----------------------------
+# Bottom: Progress bar (진짜 하단 진행률)
+# -----------------------------
+st.markdown("---")
+st.progress(int(st.session_state["progress"]))
