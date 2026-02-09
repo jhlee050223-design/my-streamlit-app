@@ -11,66 +11,63 @@ from pypdf import PdfReader
 from openai import OpenAI
 
 # -----------------------------
-# Config
+# 1. 환경 설정 및 초기화
 # -----------------------------
 load_dotenv()
-# 이제 환경 변수에서 가져오지 못하더라도 사이드바에서 입력받으므로 기본값은 빈 문자열로 둡니다.
 DEFAULT_MODEL = "gpt-4o-mini" 
 
 st.set_page_config(
-    page_title="Report mate",
+    page_title="Report mate - 다중 논문 분석",
     layout="wide",
 )
 
+if "result" not in st.session_state:
+    st.session_state["result"] = None
+if "pdf_files_dict" not in st.session_state:
+    st.session_state["pdf_files_dict"] = {}
+
 # -----------------------------
-# Helpers
+# 2. 유틸리티 함수
 # -----------------------------
 def center_title(text: str):
     st.markdown(
         f"""
         <style>
-          .rm-title {{
-            text-align: center;
-            font-size: 28px;
-            font-weight: 700;
-            padding: 6px 0 2px 0;
-          }}
-          .rm-sub {{
-            text-align: center;
-            opacity: 0.75;
-            margin-top: -6px;
-            margin-bottom: 10px;
-          }}
+          .rm-title {{ text-align: center; font-size: 32px; font-weight: 800; color: #1E3A8A; padding: 10px 0; }}
+          .rm-sub {{ text-align: center; opacity: 0.8; margin-top: -10px; margin-bottom: 20px; font-size: 16px; }}
         </style>
         <div class="rm-title">{text}</div>
-        <div class="rm-sub">논문 자료 분석 · 학술 개요/초안 작성 보조</div>
+        <div class="rm-sub">여러 권의 논문 자료를 분석하여 학술적 개요와 초안 작성을 돕습니다.</div>
         """,
         unsafe_allow_html=True,
     )
 
-def read_pdf_text(pdf_bytes: bytes, max_chars: int = 20000) -> str:
-    reader = PdfReader(io.BytesIO(pdf_bytes))
-    chunks = []
-    for i, page in enumerate(reader.pages[:30]):
+def read_pdf_text(uploaded_files: List) -> str:
+    """여러 개의 PDF에서 텍스트를 추출하고 구조화합니다."""
+    all_text = []
+    for uploaded_file in uploaded_files:
         try:
-            chunks.append(page.extract_text() or "")
-        except Exception:
-            chunks.append("")
-    text = "\n".join(chunks).strip()
-    if len(text) > max_chars:
-        text = text[:max_chars] + "\n\n[...텍스트가 길어 일부만 사용됨...]"
-    return text
+            reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
+            text = f"\n[출처 파일: {uploaded_file.name}]\n"
+            # 각 논문당 핵심 내용이 몰려있는 앞부분 10페이지 위주로 추출
+            for page in reader.pages[:10]:
+                content = page.extract_text()
+                if content:
+                    text += content
+            all_text.append(text)
+        except Exception as e:
+            st.error(f"{uploaded_file.name} 읽기 실패: {e}")
+    
+    combined = "\n".join(all_text)
+    # LLM 컨텍스트 한계를 고려하여 최대 약 30,000자 제한
+    return combined[:30000] + ("..." if len(combined) > 30000 else "")
 
-def pdf_viewer_iframe(pdf_bytes: bytes, height: int = 780):
+def pdf_viewer_iframe(pdf_bytes: bytes, height: int = 800):
+    """Base64 인코딩을 통한 PDF 뷰어"""
     b64 = base64.b64encode(pdf_bytes).decode("utf-8")
     pdf_display = f"""
-        <iframe
-            src="data:application/pdf;base64,{b64}"
-            width="100%"
-            height="{height}"
-            style="border: 1px solid rgba(0,0,0,0.12); border-radius: 10px;"
-            type="application/pdf"
-        ></iframe>
+        <iframe src="data:application/pdf;base64,{b64}" width="100%" height="{height}px" 
+        style="border: 1px solid #E2E8F0; border-radius: 12px;" type="application/pdf"></iframe>
     """
     st.markdown(pdf_display, unsafe_allow_html=True)
 
@@ -84,264 +81,164 @@ class GenerateParams:
     language: str
     model: str
 
-def build_prompt(params: GenerateParams, pdf_text: str, bibliography: List[str]) -> str:
-    bib_block = "\n".join([f"- {b}" for b in bibliography]) if bibliography else "- (없음)"
-    return f"""
-당신은 연구 보조 AI입니다. 사용자가 입력한 주제/목적/가설과 제공된 원문(PDF 텍스트 발췌)을 바탕으로,
-학술적 개요와 초안을 생성하세요.
-
-요구사항:
-- 반드시 아래 섹션 구조로 "세부 개요"를 작성:
-  1) 서론
-  2) 이론적 배경
-  3) 연구방법
-  4) 결과(예상/가정 가능. 단, 실제 데이터가 없음을 명시)
-  5) 결론
-- 각 섹션에는 소제목(2~5개) + 각 소제목별 핵심 bullet(2~5개)을 포함
-- 이어서 "초안 텍스트"를 섹션 구조 그대로 작성 (과장 금지, 학술 문체)
-- 인용은 사용자가 고른 스타일({params.citation_style})을 따르되,
-  원문 출처가 불명확하면 (출처불명)으로 표시하고 과도한 단정은 피함
-- 언어: {params.language}
-- 문체/스타일: {params.writing_style}
-- 출력은 반드시 JSON 하나만 반환
-
-JSON 스키마(반드시 준수):
-{{
-  "outline": {{
-    "서론": [{{"title": "...", "bullets": ["...", "..."]}}],
-    "이론적 배경": [{{"title": "...", "bullets": ["...", "..."]}}],
-    "연구방법": [{{"title": "...", "bullets": ["...", "..."]}}],
-    "결과": [{{"title": "...", "bullets": ["...", "..."]}}],
-    "결론": [{{"title": "...", "bullets": ["...", "..."]}}]
-  }},
-  "draft": {{
-    "서론": "...",
-    "이론적 배경": "...",
-    "연구방법": "...",
-    "결과": "...",
-    "결론": "..."
-  }},
-  "bibliography_suggestions": ["...", "..."]
-}}
-
-사용자 입력:
-- 주제: {params.topic}
-- 연구 목적: {params.purpose}
-- 가설: {params.hypothesis}
-
-사용자 참고문헌(있다면 우선 활용):
-{bib_block}
-
-PDF 텍스트(발췌):
-\"\"\"
-{pdf_text}
-\"\"\"
-""".strip()
-
-def call_openai_json(prompt: str, model: str, api_key: str) -> Dict[str, Any]:
-    """입력받은 API 키를 사용하여 OpenAI 호출"""
-    if not api_key:
-        raise RuntimeError("OpenAI API Key가 입력되지 않았습니다. 사이드바를 확인하세요.")
-
+def call_openai_api(prompt: str, model: str, api_key: str) -> Dict[str, Any]:
+    """OpenAI API 호출 및 JSON 파싱"""
     client = OpenAI(api_key=api_key)
-
-    try:
-        # Chat Completions API 사용
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a helpful research assistant. Output JSON only."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.4,
-            response_format={ "type": "json_object" } # JSON 모드 강제
-        )
-        text = resp.choices[0].message.content or ""
-    except Exception as e:
-        raise e
-
-    # JSON 파싱(코드펜스 제거)
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("```", 2)[1] if "```" in text else text
-        text = text.replace("json", "", 1).strip()
-
-    return json.loads(text)
-
-def init_session():
-    st.session_state.setdefault("topic", "")
-    st.session_state.setdefault("purpose", "")
-    st.session_state.setdefault("hypothesis", "")
-    st.session_state.setdefault("pdf_bytes", None)
-    st.session_state.setdefault("pdf_text", "")
-    st.session_state.setdefault("outline_json", None)
-    st.session_state.setdefault("draft_json", None)
-    st.session_state.setdefault("bib_items", [])
-    st.session_state.setdefault("progress", 0)
-
-init_session()
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": "You are a professional academic research assistant. You must respond in valid JSON format only."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.3,
+        response_format={"type": "json_object"}
+    )
+    return json.loads(response.choices[0].message.content)
 
 # -----------------------------
-# UI: Header
+# 3. 사이드바 구성 (설정 및 API 키)
+# -----------------------------
+with st.sidebar:
+    st.header("🔐 API 설정")
+    user_api_key = st.text_input("OpenAI API Key", type="password", placeholder="sk-...")
+    if not user_api_key:
+        st.warning("분석을 시작하려면 API 키를 입력하세요.")
+    
+    st.divider()
+    st.header("📝 작성 옵션")
+    citation_style = st.selectbox("인용 스타일", ["APA", "MLA", "Chicago", "IEEE"], index=0)
+    writing_style = st.selectbox("문체 스타일", ["학술적(Professional)", "간결(Concise)", "설명적(Descriptive)"], index=0)
+    language = st.selectbox("출력 언어", ["한국어", "English"], index=0)
+    model_name = st.text_input("사용 모델", value=DEFAULT_MODEL)
+
+    st.divider()
+    if st.button("🔄 모든 데이터 초기화", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
+
+# -----------------------------
+# 4. 메인 화면 구성
 # -----------------------------
 center_title("리포트 메이트 (Report mate)")
 
-# -----------------------------
-# Sidebar: API Key + Settings
-# -----------------------------
-with st.sidebar:
-    st.header("🔑 API 설정")
-    # 사이드바에 API 키 입력란 추가
-    user_api_key = st.text_input("OpenAI API Key", type="password", placeholder="sk-...")
-    st.info("API 키는 서버에 저장되지 않고 현재 세션에서만 사용됩니다.")
-    
-    st.divider()
-    st.header("설정")
-    citation_style = st.selectbox("인용 스타일", ["APA", "MLA", "Chicago", "IEEE"], index=0)
-    writing_style = st.selectbox("문체", ["학술적(기본)", "간결", "서술적", "비평적"], index=0)
-    language = st.selectbox("언어", ["한국어", "English"], index=0)
-    model_name = st.text_input("모델", value=DEFAULT_MODEL)
+# 상단 입력부
+st.markdown("### 1. 연구 기본 정보")
+row1_col1, row1_col2, row1_col3 = st.columns(3)
+with row1_col1:
+    topic = st.text_input("연구 주제", placeholder="예: 생성형 AI의 교육적 활용")
+with row1_col2:
+    purpose = st.text_input("연구 목적", placeholder="예: 학습 효율성 증진 효과 분석")
+with row1_col3:
+    hypothesis = st.text_input("연구 가설", placeholder="예: AI 튜터 사용군이 일반 학습군보다 성취도가 높을 것이다")
 
-    st.divider()
-    st.subheader("참고문헌 리스트")
-    new_bib = st.text_input("항목 추가", placeholder="예: Author, A. (2023). Title...")
-    col_add, col_clear = st.columns([1, 1])
-    with col_add:
-        if st.button("추가", use_container_width=True) and new_bib.strip():
-            st.session_state["bib_items"].append(new_bib.strip())
-            st.rerun()
-    with col_clear:
-        if st.button("비우기", use_container_width=True):
-            st.session_state["bib_items"] = []
-            st.rerun()
+st.markdown("### 2. 논문 자료 업로드 (다중 파일 가능)")
+uploaded_files = st.file_uploader(
+    "참고할 PDF 논문들을 모두 업로드하세요.", 
+    type=["pdf"], 
+    accept_multiple_files=True
+)
 
-    if st.session_state["bib_items"]:
-        for i, b in enumerate(st.session_state["bib_items"], start=1):
-            st.caption(f"{i}. {b}")
+# 세션에 파일 데이터 캐싱
+if uploaded_files:
+    for f in uploaded_files:
+        if f.name not in st.session_state["pdf_files_dict"]:
+            st.session_state["pdf_files_dict"][f.name] = f.getvalue()
+
+st.divider()
 
 # -----------------------------
-# Top: Topic input row
+# 5. 분석 및 결과 뷰어 (2컬럼 레이아웃)
 # -----------------------------
-st.markdown("### 주제 입력")
-top_c1, top_c2, top_c3 = st.columns([2, 2, 2])
-with top_c1:
-    st.session_state["topic"] = st.text_input("주제", value=st.session_state["topic"], placeholder="연구 주제를 입력하세요")
-with top_c2:
-    st.session_state["purpose"] = st.text_input("연구 목적", value=st.session_state["purpose"], placeholder="연구 목적을 입력하세요")
-with top_c3:
-    st.session_state["hypothesis"] = st.text_input("가설", value=st.session_state["hypothesis"], placeholder="가설을 입력하세요")
+left_col, right_col = st.columns([1, 1], gap="large")
 
-st.markdown("---")
-
-# -----------------------------
-# Center: Upload area
-# -----------------------------
-st.markdown("### 자료 업로드")
-uploaded = st.file_uploader("인용 원문 소스(PDF)를 업로드하세요", type=["pdf"])
-if uploaded is not None:
-    st.session_state["pdf_bytes"] = uploaded.read()
-    st.session_state["pdf_text"] = ""
-    st.success("PDF 업로드 완료")
-
-# -----------------------------
-# Action buttons
-# -----------------------------
-action_c1, action_c2, action_c3 = st.columns([1.2, 1.2, 3.6])
-with action_c1:
-    gen = st.button("개요/초안 생성", type="primary", use_container_width=True)
-with action_c2:
-    if st.button("초기화", use_container_width=True):
-        st.session_state.clear()
-        st.rerun()
-with action_c3:
-    st.session_state["progress"] = st.slider("진행률", 0, 100, int(st.session_state["progress"]))
-
-# -----------------------------
-# Main Content
-# -----------------------------
-left, right = st.columns([1, 1], gap="large")
-
-with left:
-    st.subheader("인용된 원문 소스 (PDF)")
-    if st.session_state["pdf_bytes"]:
-        pdf_viewer_iframe(st.session_state["pdf_bytes"], height=820)
+with left_col:
+    st.subheader("📁 업로드된 자료 확인")
+    if st.session_state["pdf_files_dict"]:
+        file_names = list(st.session_state["pdf_files_dict"].keys())
+        selected_file = st.selectbox("내용을 확인할 파일을 선택하세요", file_names)
+        pdf_viewer_iframe(st.session_state["pdf_files_dict"][selected_file])
     else:
-        st.info("PDF를 업로드하면 여기에 표시됩니다.")
+        st.info("업로드된 논문이 없습니다. 위에서 PDF 파일을 추가해 주세요.")
 
-with right:
-    st.subheader("AI 제안: 논리 구조 및 초안")
-    tabs = st.tabs(["개요", "초안", "참고문헌 제안", "JSON 원본"])
-
-    if gen:
+with right_col:
+    st.subheader("💡 AI 분석 및 초안 생성")
+    
+    # 생성 버튼
+    if st.button("🚀 분석 및 초안 작성 시작", type="primary", use_container_width=True):
         if not user_api_key:
             st.error("사이드바에 OpenAI API Key를 입력해야 합니다.")
-        elif not st.session_state["topic"].strip():
-            st.error("주제를 입력하세요.")
-        elif not st.session_state["pdf_bytes"]:
-            st.error("PDF를 업로드하세요.")
+        elif not uploaded_files:
+            st.error("분석할 PDF 파일을 최소 하나 이상 업로드하세요.")
+        elif not topic:
+            st.error("연구 주제를 입력하세요.")
         else:
-            try:
-                st.session_state["progress"] = 20
-                if not st.session_state["pdf_text"]:
-                    st.session_state["pdf_text"] = read_pdf_text(st.session_state["pdf_bytes"])
-                
-                st.session_state["progress"] = 45
-                params = GenerateParams(
-                    topic=st.session_state["topic"].strip(),
-                    purpose=st.session_state["purpose"].strip(),
-                    hypothesis=st.session_state["hypothesis"].strip(),
-                    citation_style=citation_style,
-                    writing_style=writing_style,
-                    language=language,
-                    model=model_name.strip() or DEFAULT_MODEL,
-                )
-                prompt = build_prompt(params, st.session_state["pdf_text"], st.session_state["bib_items"])
-                
-                st.session_state["progress"] = 65
-                result = call_openai_json(prompt=prompt, model=params.model, api_key=user_api_key)
-                
-                st.session_state["outline_json"] = result.get("outline")
-                st.session_state["draft_json"] = result.get("draft")
-                st.session_state["bib_suggestions"] = result.get("bibliography_suggestions", [])
-                st.session_state["raw_json"] = result
-                st.session_state["progress"] = 100
-                st.success("생성 완료!")
-            except Exception as e:
-                st.session_state["progress"] = 0
-                st.error(f"오류 발생: {e}")
+            with st.spinner("여러 논문 데이터를 통합 분석 중입니다. 잠시만 기다려 주세요..."):
+                try:
+                    # 텍스트 추출 및 프롬프트 빌드
+                    context_text = read_pdf_text(uploaded_files)
+                    
+                    prompt = f"""
+                    당신은 전문적인 연구 보조원입니다. 다음 제공된 여러 편의 논문 내용을 바탕으로 연구 리포트의 개요와 초안을 작성하세요.
+                    
+                    [연구 정보]
+                    - 주제: {topic}
+                    - 목적: {purpose}
+                    - 가설: {hypothesis}
+                    
+                    [제공된 논문 텍스트 발췌]
+                    {context_text}
+                    
+                    [지시 사항]
+                    1. 제공된 텍스트의 내용을 바탕으로 인용을 포함하여 작성할 것.
+                    2. 인용 스타일은 {citation_style}를 따를 것.
+                    3. 문체는 {writing_style}로, 언어는 {language}로 작성할 것.
+                    4. 결과는 반드시 다음 JSON 구조를 유지할 것:
+                    {{
+                        "outline": {{
+                            "서론": ["소제목1", "소제목2"],
+                            "이론적 배경": ["소제목1", "소제목2"],
+                            "연구방법": ["소제목1"],
+                            "결론": ["소제목1"]
+                        }},
+                        "draft": {{
+                            "서론": "초안 내용...",
+                            "이론적 배경": "초안 내용...",
+                            "연구방법": "초안 내용...",
+                            "결론": "초안 내용..."
+                        }},
+                        "references": ["참고문헌1", "참고문헌2"]
+                    }}
+                    """
+                    
+                    # API 호출
+                    result = call_openai_api(prompt, model_name, user_api_key)
+                    st.session_state["result"] = result
+                    st.balloons()
+                    
+                except Exception as e:
+                    st.error(f"분석 중 오류가 발생했습니다: {e}")
 
-    # 결과 렌더링
-    outline = st.session_state.get("outline_json")
-    draft = st.session_state.get("draft_json")
-    bib_suggestions = st.session_state.get("bib_suggestions", [])
-
-    with tabs[0]:
-        if outline:
-            for section, items in outline.items():
-                with st.expander(section, expanded=True):
-                    for it in items:
-                        st.markdown(f"**{it.get('title','')}**")
-                        for b in it.get("bullets", []):
-                            st.markdown(f"- {b}")
-        else:
-            st.caption("내용이 없습니다.")
-
-    with tabs[1]:
-        if draft:
-            for section, text in draft.items():
-                st.markdown(f"**{section}**")
-                st.text_area(label=section, value=text, height=150, key=f"draft_{section}")
-        else:
-            st.caption("내용이 없습니다.")
-
-    with tabs[2]:
-        if bib_suggestions:
-            for b in bib_suggestions:
-                st.markdown(f"- {b}")
-
-    with tabs[3]:
-        if st.session_state.get("raw_json"):
-            st.json(st.session_state["raw_json"])
+    # 결과 출력 탭
+    if st.session_state["result"]:
+        res = st.session_state["result"]
+        tab1, tab2, tab3 = st.tabs(["📊 상세 개요", "📝 섹션별 초안", "📚 참고문헌"])
+        
+        with tab1:
+            for section, subs in res.get("outline", {}).items():
+                with st.expander(f"**{section}**", expanded=True):
+                    for sub in subs:
+                        st.markdown(f"- {sub}")
+        
+        with tab2:
+            for section, content in res.get("draft", {}).items():
+                st.markdown(f"#### {section}")
+                st.info(content)
+        
+        with tab3:
+            for ref in res.get("references", []):
+                st.markdown(f"- {ref}")
+    else:
+        st.caption("분석 시작 버튼을 누르면 AI가 생성한 개요와 초안이 여기에 표시됩니다.")
 
 st.markdown("---")
-st.progress(int(st.session_state["progress"]))
+st.caption("© 2024 Report Mate - Academic Writing Assistant")
