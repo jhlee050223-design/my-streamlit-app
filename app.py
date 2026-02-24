@@ -6,7 +6,7 @@ from pypdf import PdfReader
 from openai import OpenAI
 
 # =========================================================
-# 1) Page Configuration (Premium UI: mix of Linear/Notion + Lux Dark)
+# 1) Page Configuration (Premium UI: Linear/Notion + Lux, LIGHT text)
 # =========================================================
 st.set_page_config(page_title="Report Mate", layout="centered")
 
@@ -16,29 +16,27 @@ st.markdown(
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 :root{
-  --bg: #0B0F17;
-  --bg2:#0A0D14;
-  --panel: rgba(255,255,255,0.06);
-  --panel2: rgba(255,255,255,0.085);
-  --border: rgba(255,255,255,0.10);
-  --border2: rgba(255,255,255,0.14);
-  --text: rgba(255,255,255,0.92);
-  --muted: rgba(255,255,255,0.62);
-  --muted2: rgba(255,255,255,0.50);
-  --accent: #7C5CFF;
-  --accent2: #00D2FF;
-  --danger: #FF5C77;
-  --ok: #35E1A1;
-  --shadow: 0 18px 60px rgba(0,0,0,0.35);
-  --shadow2: 0 12px 40px rgba(0,0,0,0.25);
+  --bg: #F7F8FA;
+  --bg2:#F3F4F7;
+  --panel: rgba(255,255,255,0.86);
+  --panel2: rgba(255,255,255,0.96);
+  --border: rgba(15,23,42,0.10);
+  --border2: rgba(15,23,42,0.14);
+  --text: rgba(17,24,39,0.92);   /* 거의 검정 */
+  --muted: rgba(17,24,39,0.62);
+  --muted2: rgba(17,24,39,0.52);
+  --accent: #6D5EF7;
+  --accent2: #00B7FF;
+  --shadow: 0 18px 60px rgba(2,6,23,0.10);
+  --shadow2: 0 12px 40px rgba(2,6,23,0.08);
 }
 
 html, body, [class*="css"]{
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   background:
-    radial-gradient(1200px 800px at 18% 10%, rgba(124,92,255,0.22), transparent 55%),
-    radial-gradient(900px 600px at 85% 15%, rgba(0,210,255,0.16), transparent 50%),
-    radial-gradient(700px 700px at 55% 88%, rgba(255,255,255,0.06), transparent 45%),
+    radial-gradient(1200px 800px at 18% 10%, rgba(109,94,247,0.14), transparent 55%),
+    radial-gradient(900px 600px at 85% 15%, rgba(0,183,255,0.10), transparent 50%),
+    radial-gradient(700px 700px at 55% 88%, rgba(0,0,0,0.04), transparent 45%),
     linear-gradient(180deg, var(--bg), var(--bg2)) !important;
   color: var(--text) !important;
 }
@@ -52,18 +50,18 @@ html, body, [class*="css"]{
 
 /* Sidebar styling */
 section[data-testid="stSidebar"]{
-  background: rgba(255,255,255,0.035);
-  border-right: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.72);
+  border-right: 1px solid rgba(15,23,42,0.10);
 }
 section[data-testid="stSidebar"] *{
-  color: var(--text);
+  color: var(--text) !important;
 }
 
 /* Hero */
 .hero{
   padding: 28px 26px;
   border-radius: 22px;
-  background: linear-gradient(135deg, rgba(124,92,255,0.20), rgba(0,210,255,0.09));
+  background: linear-gradient(135deg, rgba(109,94,247,0.16), rgba(0,183,255,0.08));
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
   margin: 8px 0 18px 0;
@@ -74,7 +72,7 @@ section[data-testid="stSidebar"] *{
   content:"";
   position:absolute;
   inset:-2px;
-  background: radial-gradient(900px 320px at 15% 18%, rgba(255,255,255,0.10), transparent 60%);
+  background: radial-gradient(900px 320px at 15% 18%, rgba(255,255,255,0.65), transparent 60%);
   pointer-events:none;
 }
 .badge{
@@ -84,17 +82,17 @@ section[data-testid="stSidebar"] *{
   padding: 6px 10px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.65);
   color: var(--muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 800;
 }
 .hero-title{
   margin-top: 10px;
-  font-size: 32px;
-  font-weight: 850;
+  font-size: 34px;
+  font-weight: 900;
   letter-spacing: -0.02em;
-  line-height: 1.18;
+  line-height: 1.12;
 }
 .hero-sub{
   margin-top: 8px;
@@ -110,13 +108,13 @@ section[data-testid="stSidebar"] *{
   margin-top: 12px;
 }
 .pill{
-  background: rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.70);
   border: 1px solid var(--border);
   padding: 7px 10px;
   border-radius: 999px;
   font-size: 12px;
   color: var(--muted);
-  font-weight: 650;
+  font-weight: 700;
 }
 
 /* Cards (Glass) */
@@ -133,14 +131,14 @@ section[data-testid="stSidebar"] *{
 .card-title{
   font-size: 13px;
   color: var(--muted);
-  font-weight: 800;
+  font-weight: 900;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   margin-bottom: 10px;
 }
 .h3{
   font-size: 18px;
-  font-weight: 800;
+  font-weight: 900;
   letter-spacing: -0.01em;
   margin: 0 0 8px 0;
 }
@@ -157,77 +155,76 @@ section[data-testid="stSidebar"] *{
 .stFileUploader section,
 .stSelectbox>div>div{
   border-radius: 14px !important;
-  border: 1px solid rgba(255,255,255,0.12) !important;
-  background: rgba(255,255,255,0.06) !important;
+  border: 1px solid rgba(15,23,42,0.12) !important;
+  background: rgba(255,255,255,0.80) !important;
   color: var(--text) !important;
 }
 .stTextArea textarea::placeholder,
 .stTextInput input::placeholder{
-  color: rgba(255,255,255,0.40) !important;
+  color: rgba(17,24,39,0.40) !important;
 }
 
 /* Buttons */
 .stButton>button{
   width:100%;
   border-radius: 14px;
-  border: 1px solid rgba(255,255,255,0.14);
-  background: linear-gradient(135deg, rgba(124,92,255,1), rgba(0,210,255,0.88));
-  color: white;
-  font-weight: 850;
+  border: 1px solid rgba(15,23,42,0.10);
+  background: linear-gradient(135deg, rgba(109,94,247,1), rgba(0,183,255,0.90));
+  color: white !important;
+  font-weight: 900;
   padding: 12px 14px;
-  box-shadow: 0 12px 30px rgba(124,92,255,0.24);
+  box-shadow: 0 12px 30px rgba(109,94,247,0.22);
   transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
 }
 .stButton>button:hover{
   transform: translateY(-1px);
-  box-shadow: 0 16px 44px rgba(124,92,255,0.30);
-  filter: brightness(1.03);
+  box-shadow: 0 16px 44px rgba(109,94,247,0.28);
+  filter: brightness(1.02);
 }
 
-/* Secondary button – we wrap it with a custom class on container */
+/* Secondary button */
 .secondary-btn .stButton>button{
-  background: rgba(255,255,255,0.06) !important;
-  border: 1px solid rgba(255,255,255,0.14) !important;
+  background: rgba(255,255,255,0.78) !important;
+  border: 1px solid rgba(15,23,42,0.12) !important;
   box-shadow: none !important;
-  color: rgba(255,255,255,0.88) !important;
+  color: rgba(17,24,39,0.86) !important;
 }
 .secondary-btn .stButton>button:hover{
   transform: translateY(-1px);
-  box-shadow: 0 14px 36px rgba(0,0,0,0.20) !important;
+  box-shadow: 0 14px 36px rgba(2,6,23,0.10) !important;
   filter: none !important;
 }
 
 /* Tabs */
 [data-baseweb="tab-list"]{
-  background: rgba(255,255,255,0.05);
-  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.70);
+  border: 1px solid rgba(15,23,42,0.10);
   border-radius: 14px;
   padding: 6px;
 }
 [data-baseweb="tab"]{
   border-radius: 12px;
   color: var(--muted) !important;
-  font-weight: 800;
+  font-weight: 900;
 }
 [aria-selected="true"]{
-  background: rgba(255,255,255,0.12) !important;
+  background: rgba(255,255,255,0.95) !important;
   color: var(--text) !important;
 }
 
 /* Popover button */
 div[data-testid="stPopover"] > button{
-  background: rgba(255,255,255,0.06) !important;
-  color: rgba(255,255,255,0.90) !important;
-  border: 1px solid rgba(255,255,255,0.14) !important;
+  background: rgba(255,255,255,0.78) !important;
+  color: rgba(17,24,39,0.88) !important;
+  border: 1px solid rgba(15,23,42,0.12) !important;
   border-radius: 10px !important;
   padding: 2px 8px !important;
   font-size: 12px !important;
   min-height: 26px !important;
 }
 
-/* Divider and small text */
 hr{
-  border-color: rgba(255,255,255,0.10) !important;
+  border-color: rgba(15,23,42,0.10) !important;
 }
 .small{
   font-size: 12px;
@@ -235,7 +232,7 @@ hr{
 }
 .footer{
   text-align:center;
-  color: rgba(255,255,255,0.45);
+  color: rgba(17,24,39,0.45);
   font-size: 12px;
   margin-top: 34px;
 }
@@ -260,7 +257,7 @@ def init_state():
 init_state()
 
 # =========================================================
-# 3) Sidebar (Linear/Notion-style Settings Panel)
+# 3) Sidebar
 # =========================================================
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
@@ -281,13 +278,13 @@ with st.sidebar:
         st.rerun()
 
 # =========================================================
-# 4) Hero Header
+# 4) Hero Header (Title changed to "Report Mate")
 # =========================================================
 st.markdown(
     """
 <div class="hero">
-  <div class="badge">✨ Report Mate <span style="opacity:.55">·</span> Premium Drafting</div>
-  <div class="hero-title">석사 수준 논문 초안 설계 & 작성</div>
+  <div class="badge">✨ Academic Drafting Assistant</div>
+  <div class="hero-title">Report Mate</div>
   <div class="hero-sub">
     선행연구 PDF를 기반으로 <b>개요(간결)</b>와 <b>초안(소절·문단 단위)</b>을 생성합니다.
     본문에는 출처를 연결하는 <b>[REF:파일명,p숫자]</b> 태그가 포함되며, 필요 시 <b>확장 버튼</b>으로 분량을 늘릴 수 있습니다.
@@ -329,7 +326,7 @@ st.markdown(
 st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================================================
-# 6) Core Logic (No RAG / No export) — keep previous features
+# 6) Core Logic (No RAG / No export)
 # =========================================================
 def get_combined_text_with_meta(files, max_pages_each=10, max_chars=35000):
     text_data = ""
@@ -485,7 +482,7 @@ def render_text_with_ref_popovers(text, source_map):
         st.markdown(buffer)
 
 # =========================================================
-# 7) Actions (Generate + Expand)
+# 7) Actions
 # =========================================================
 st.markdown('<div class="glass">', unsafe_allow_html=True)
 st.markdown('<div class="card-title">Actions</div>', unsafe_allow_html=True)
@@ -493,7 +490,6 @@ st.markdown('<div class="card-title">Actions</div>', unsafe_allow_html=True)
 btn_col1, btn_col2 = st.columns(2)
 with btn_col1:
     generate_clicked = st.button("🚀 분석 및 상세 초안 생성", type="primary")
-
 with btn_col2:
     st.markdown('<div class="secondary-btn">', unsafe_allow_html=True)
     expand_clicked = st.button("➕ 초안 확장(추가 작성)", disabled=(st.session_state["result"] is None))
@@ -616,4 +612,4 @@ else:
         unsafe_allow_html=True,
     )
 
-st.markdown('<div class="footer">© 2026 Report Mate · Premium UI (Notion/Linear + Lux Dark)</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer">© 2026 Report Mate</div>', unsafe_allow_html=True)
