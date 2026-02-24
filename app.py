@@ -5,85 +5,248 @@ import streamlit as st
 from pypdf import PdfReader
 from openai import OpenAI
 
-# -----------------------------
-# 1. Page Configuration & Apple UX Style
-# -----------------------------
+# =========================================================
+# 1) Page Configuration (Premium UI: mix of Linear/Notion + Lux Dark)
+# =========================================================
 st.set_page_config(page_title="Report Mate", layout="centered")
 
 st.markdown(
     """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@400;600;700&display=swap');
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-    html, body, [class*="css"] {
-        font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
-        background-color: #FBFBFD;
-        color: #1D1D1F;
-    }
+:root{
+  --bg: #0B0F17;
+  --bg2:#0A0D14;
+  --panel: rgba(255,255,255,0.06);
+  --panel2: rgba(255,255,255,0.085);
+  --border: rgba(255,255,255,0.10);
+  --border2: rgba(255,255,255,0.14);
+  --text: rgba(255,255,255,0.92);
+  --muted: rgba(255,255,255,0.62);
+  --muted2: rgba(255,255,255,0.50);
+  --accent: #7C5CFF;
+  --accent2: #00D2FF;
+  --danger: #FF5C77;
+  --ok: #35E1A1;
+  --shadow: 0 18px 60px rgba(0,0,0,0.35);
+  --shadow2: 0 12px 40px rgba(0,0,0,0.25);
+}
 
-    .report-card {
-        background: white;
-        padding: 30px;
-        border-radius: 20px;
-        box-shadow: 0 8px 30px rgba(0,0,0,0.04);
-        margin-bottom: 25px;
-        border: 1px solid #F2F2F7;
-    }
+html, body, [class*="css"]{
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background:
+    radial-gradient(1200px 800px at 18% 10%, rgba(124,92,255,0.22), transparent 55%),
+    radial-gradient(900px 600px at 85% 15%, rgba(0,210,255,0.16), transparent 50%),
+    radial-gradient(700px 700px at 55% 88%, rgba(255,255,255,0.06), transparent 45%),
+    linear-gradient(180deg, var(--bg), var(--bg2)) !important;
+  color: var(--text) !important;
+}
 
-    .main-header {
-        font-size: 34px;
-        font-weight: 700;
-        letter-spacing: -0.5px;
-        text-align: center;
-        padding-top: 40px;
-        margin-bottom: 5px;
-    }
+/* Make container feel premium + centered */
+.block-container{
+  padding-top: 2.2rem;
+  padding-bottom: 3rem;
+  max-width: 980px;
+}
 
-    .sub-header {
-        font-size: 17px;
-        color: #86868B;
-        text-align: center;
-        margin-bottom: 40px;
-    }
+/* Sidebar styling */
+section[data-testid="stSidebar"]{
+  background: rgba(255,255,255,0.035);
+  border-right: 1px solid rgba(255,255,255,0.08);
+}
+section[data-testid="stSidebar"] *{
+  color: var(--text);
+}
 
-    .stTextInput>div>div>input, .stFileUploader section, .stTextArea textarea, .stSelectbox>div>div {
-        border-radius: 12px !important;
-    }
+/* Hero */
+.hero{
+  padding: 28px 26px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, rgba(124,92,255,0.20), rgba(0,210,255,0.09));
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  margin: 8px 0 18px 0;
+  position: relative;
+  overflow: hidden;
+}
+.hero:before{
+  content:"";
+  position:absolute;
+  inset:-2px;
+  background: radial-gradient(900px 320px at 15% 18%, rgba(255,255,255,0.10), transparent 60%);
+  pointer-events:none;
+}
+.badge{
+  display:inline-flex;
+  gap:8px;
+  align-items:center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.06);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.hero-title{
+  margin-top: 10px;
+  font-size: 32px;
+  font-weight: 850;
+  letter-spacing: -0.02em;
+  line-height: 1.18;
+}
+.hero-sub{
+  margin-top: 8px;
+  font-size: 15px;
+  color: var(--muted);
+  line-height: 1.65;
+  max-width: 78ch;
+}
+.kpi{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  margin-top: 12px;
+}
+.pill{
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
+  padding: 7px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 650;
+}
 
-    .stButton>button {
-        width: 100%;
-        border-radius: 12px;
-        border: none;
-        background-color: #0071E3;
-        color: white;
-        font-weight: 600;
-        padding: 12px;
-        transition: all 0.2s ease-in-out;
-    }
+/* Cards (Glass) */
+.glass{
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  padding: 22px;
+  box-shadow: var(--shadow2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  margin: 14px 0 18px 0;
+}
+.card-title{
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.h3{
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  margin: 0 0 8px 0;
+}
+.help{
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+  margin-top: 6px;
+}
 
-    .stButton>button:hover {
-        background-color: #0077ED;
-        box-shadow: 0 4px 15px rgba(0,113,227,0.3);
-    }
+/* Inputs */
+.stTextInput>div>div>input,
+.stTextArea textarea,
+.stFileUploader section,
+.stSelectbox>div>div{
+  border-radius: 14px !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
+  background: rgba(255,255,255,0.06) !important;
+  color: var(--text) !important;
+}
+.stTextArea textarea::placeholder,
+.stTextInput input::placeholder{
+  color: rgba(255,255,255,0.40) !important;
+}
 
-    div[data-testid="stPopover"] > button {
-        background-color: #F5F5F7 !important;
-        color: #0071E3 !important;
-        border: 1px solid #D2D2D7 !important;
-        border-radius: 8px !important;
-        padding: 2px 8px !important;
-        font-size: 12px !important;
-        min-height: 24px !important;
-        margin: 0 4px;
-    }
-    </style>
-    """,
+/* Buttons */
+.stButton>button{
+  width:100%;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: linear-gradient(135deg, rgba(124,92,255,1), rgba(0,210,255,0.88));
+  color: white;
+  font-weight: 850;
+  padding: 12px 14px;
+  box-shadow: 0 12px 30px rgba(124,92,255,0.24);
+  transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+}
+.stButton>button:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 16px 44px rgba(124,92,255,0.30);
+  filter: brightness(1.03);
+}
+
+/* Secondary button – we wrap it with a custom class on container */
+.secondary-btn .stButton>button{
+  background: rgba(255,255,255,0.06) !important;
+  border: 1px solid rgba(255,255,255,0.14) !important;
+  box-shadow: none !important;
+  color: rgba(255,255,255,0.88) !important;
+}
+.secondary-btn .stButton>button:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 14px 36px rgba(0,0,0,0.20) !important;
+  filter: none !important;
+}
+
+/* Tabs */
+[data-baseweb="tab-list"]{
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 6px;
+}
+[data-baseweb="tab"]{
+  border-radius: 12px;
+  color: var(--muted) !important;
+  font-weight: 800;
+}
+[aria-selected="true"]{
+  background: rgba(255,255,255,0.12) !important;
+  color: var(--text) !important;
+}
+
+/* Popover button */
+div[data-testid="stPopover"] > button{
+  background: rgba(255,255,255,0.06) !important;
+  color: rgba(255,255,255,0.90) !important;
+  border: 1px solid rgba(255,255,255,0.14) !important;
+  border-radius: 10px !important;
+  padding: 2px 8px !important;
+  font-size: 12px !important;
+  min-height: 26px !important;
+}
+
+/* Divider and small text */
+hr{
+  border-color: rgba(255,255,255,0.10) !important;
+}
+.small{
+  font-size: 12px;
+  color: var(--muted2);
+}
+.footer{
+  text-align:center;
+  color: rgba(255,255,255,0.45);
+  font-size: 12px;
+  margin-top: 34px;
+}
+</style>
+""",
     unsafe_allow_html=True,
 )
 
-# -----------------------------
-# 2. Session State Initialization
-# -----------------------------
+# =========================================================
+# 2) Session State
+# =========================================================
 def init_state():
     if "result" not in st.session_state:
         st.session_state["result"] = None
@@ -96,22 +259,19 @@ def init_state():
 
 init_state()
 
-# -----------------------------
-# 3. Sidebar (Gemini-style options, but keep your core UX)
-# -----------------------------
+# =========================================================
+# 3) Sidebar (Linear/Notion-style Settings Panel)
+# =========================================================
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     user_api_key = st.text_input("OpenAI API Key", type="password", placeholder="sk-...")
     model_name = st.text_input("Model", value="gpt-4o-mini")
 
     st.divider()
-    st.subheader("📝 Draft Options (기본 길이 강화)")
-    # Gemini style: length & tone
+    st.markdown("### 📝 Draft Options")
     base_paras = st.select_slider("소절당 문단 수(기본)", options=[2, 3], value=2)
     min_chars_per_para = st.select_slider("문단 최소 글자 수", options=[200, 250, 300, 400], value=200)
-
     tone_setting = st.selectbox("어조", ["Academic", "Formal", "Analytical"], index=0)
-    # 확장 버튼 눌렀을 때 추가되는 문단 수
     expand_additional = st.select_slider("확장 시 소절당 추가 문단", options=[1, 2], value=1)
 
     st.divider()
@@ -120,37 +280,58 @@ with st.sidebar:
         init_state()
         st.rerun()
 
-# -----------------------------
-# 4. Main UI
-# -----------------------------
-st.markdown('<div class="main-header">Report Mate</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">선행연구를 분석하여 논문의 논리 구조를 설계합니다.</div>', unsafe_allow_html=True)
+# =========================================================
+# 4) Hero Header
+# =========================================================
+st.markdown(
+    """
+<div class="hero">
+  <div class="badge">✨ Report Mate <span style="opacity:.55">·</span> Premium Drafting</div>
+  <div class="hero-title">석사 수준 논문 초안 설계 & 작성</div>
+  <div class="hero-sub">
+    선행연구 PDF를 기반으로 <b>개요(간결)</b>와 <b>초안(소절·문단 단위)</b>을 생성합니다.
+    본문에는 출처를 연결하는 <b>[REF:파일명,p숫자]</b> 태그가 포함되며, 필요 시 <b>확장 버튼</b>으로 분량을 늘릴 수 있습니다.
+  </div>
+  <div class="kpi">
+    <div class="pill">🧩 소절(1.1…)</div>
+    <div class="pill">📍 REF 팝오버</div>
+    <div class="pill">➕ 초안 확장</div>
+    <div class="pill">📋 간결 개요</div>
+  </div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
-with st.container():
-    st.markdown('<div class="report-card">', unsafe_allow_html=True)
-    st.markdown("#### 🖋️ 연구 맥락 설정")
+# =========================================================
+# 5) Main Inputs
+# =========================================================
+st.markdown('<div class="glass">', unsafe_allow_html=True)
+st.markdown('<div class="card-title">Research Context</div>', unsafe_allow_html=True)
 
-    topic = st.text_input("연구 주제", placeholder="예: 생성형 AI가 대학생의 학술적 글쓰기에 미치는 영향")
+topic = st.text_input("연구 주제", placeholder="예: 생성형 AI가 대학생의 학술적 글쓰기에 미치는 영향")
+col1, col2 = st.columns(2)
+with col1:
+    purpose = st.text_input("연구 목적", placeholder="연구를 통해 무엇을 밝히고 싶나요?")
+with col2:
+    hypothesis = st.text_input("연구 가설", placeholder="예상되는 결론은 무엇인가요?")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        purpose = st.text_input("연구 목적", placeholder="연구를 통해 무엇을 밝히고 싶나요?")
-    with col2:
-        hypothesis = st.text_input("연구 가설", placeholder="예상되는 결론은 무엇인가요?")
+uploaded_files = st.file_uploader(
+    "선행연구 PDF 업로드 (다중 선택 가능)",
+    type=["pdf"],
+    accept_multiple_files=True
+)
 
-    uploaded_files = st.file_uploader(
-        "선행연구 PDF 업로드 (다중 선택 가능)", type=["pdf"], accept_multiple_files=True
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+st.markdown(
+    '<div class="help">Tip: 텍스트 추출이 안 되는 스캔 PDF는 내용이 비어 보일 수 있어요. 가능한 텍스트 기반 PDF를 업로드해 주세요.</div>',
+    unsafe_allow_html=True,
+)
+st.markdown("</div>", unsafe_allow_html=True)
 
-# -----------------------------
-# 5. Business Logic
-# -----------------------------
+# =========================================================
+# 6) Core Logic (No RAG / No export) — keep previous features
+# =========================================================
 def get_combined_text_with_meta(files, max_pages_each=10, max_chars=35000):
-    """
-    Extract first N pages from each PDF with [SOURCE:..., PAGE:...] tags.
-    (Keep your original lightweight approach; not RAG)
-    """
     text_data = ""
     for f in files:
         reader = PdfReader(io.BytesIO(f.getvalue()))
@@ -176,7 +357,7 @@ def build_initial_prompt(topic, purpose, hypothesis, context, base_paras, min_ch
 제공된 자료에 근거해 엄밀한 학술 문체(석사 논문 수준)로 서술하며, 주장-근거-비판적 논의-연구 공백/기여를 명료하게 연결합니다.
 {tone_instructions(tone)}
 반드시 지정한 JSON 스키마로만 출력하세요.
-"""
+""".strip()
 
     user_msg = f"""
 주제: {topic}
@@ -227,7 +408,7 @@ def build_initial_prompt(topic, purpose, hypothesis, context, base_paras, min_ch
     "[REF:파일명,p숫자]": "이 REF가 지지하는 핵심 근거(해당 페이지 내용) 요약"
   }}
 }}
-"""
+""".strip()
     return system_msg, user_msg
 
 def build_expand_prompt(topic, purpose, hypothesis, context, current_result, add_paras, min_chars_per_para, tone):
@@ -236,7 +417,7 @@ def build_expand_prompt(topic, purpose, hypothesis, context, current_result, add
 기존 초안을 더 전문적이고 더 길게 확장합니다. 근거(REF) 밀도와 논리 연결을 강화하세요.
 {tone_instructions(tone)}
 반드시 지정한 JSON 스키마로만 출력하세요.
-"""
+""".strip()
 
     user_msg = f"""
 주제: {topic}
@@ -274,18 +455,18 @@ def build_expand_prompt(topic, purpose, hypothesis, context, current_result, add
     "[REF:파일명,p숫자]": "이 REF가 지지하는 핵심 근거(해당 페이지 내용) 요약"
   }}
 }}
-"""
+""".strip()
     return system_msg, user_msg
 
 def call_openai_json(api_key, model, system_msg, user_msg, temperature=0.45):
     client = OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
+    resp = client.chat.completions.create(
         model=model,
         messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
         response_format={"type": "json_object"},
         temperature=temperature,
     )
-    return json.loads(response.choices[0].message.content)
+    return json.loads(resp.choices[0].message.content)
 
 def render_text_with_ref_popovers(text, source_map):
     parts = re.split(r"(\[REF:[^\]]+\])", text)
@@ -303,14 +484,23 @@ def render_text_with_ref_popovers(text, source_map):
     if buffer.strip():
         st.markdown(buffer)
 
-# -----------------------------
-# 6. Actions: Generate + Expand (Buttons)
-# -----------------------------
-colA, colB = st.columns(2)
-with colA:
+# =========================================================
+# 7) Actions (Generate + Expand)
+# =========================================================
+st.markdown('<div class="glass">', unsafe_allow_html=True)
+st.markdown('<div class="card-title">Actions</div>', unsafe_allow_html=True)
+
+btn_col1, btn_col2 = st.columns(2)
+with btn_col1:
     generate_clicked = st.button("🚀 분석 및 상세 초안 생성", type="primary")
-with colB:
+
+with btn_col2:
+    st.markdown('<div class="secondary-btn">', unsafe_allow_html=True)
     expand_clicked = st.button("➕ 초안 확장(추가 작성)", disabled=(st.session_state["result"] is None))
+    st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown('<div class="small">• 확장은 기존 초안을 바탕으로 소절마다 문단을 추가합니다.</div>', unsafe_allow_html=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
 if generate_clicked:
     if not user_api_key:
@@ -379,49 +569,51 @@ if expand_clicked:
                     model=model0,
                     system_msg=system_msg,
                     user_msg=user_msg,
-                    temperature=0.5,
+                    temperature=0.50,
                 )
                 st.session_state["expansion_level"] += 1
             except Exception as e:
                 st.error(f"확장 중 오류가 발생했습니다: {e}")
 
-# -----------------------------
-# 7. Result Display
-# -----------------------------
+# =========================================================
+# 8) Results
+# =========================================================
 if st.session_state["result"]:
     res = st.session_state["result"]
-    st.markdown("---")
+
+    st.markdown('<div class="glass">', unsafe_allow_html=True)
+    st.markdown('<div class="card-title">Results</div>', unsafe_allow_html=True)
 
     if st.session_state.get("expansion_level", 0) > 0:
-        st.info(f"초안이 {st.session_state['expansion_level']}회 확장되었습니다.")
+        st.success(f"초안이 {st.session_state['expansion_level']}회 확장되었습니다.")
 
     tab1, tab2 = st.tabs(["📋 상세 설계 개요(간결)", "✍️ 각주 포함 초안(전문적)"])
 
     with tab1:
         for section, detail in res.get("detailed_outline", {}).items():
-            st.markdown(
-                f"""
-                <div class="report-card">
-                    <div style="color: #0071E3; font-weight: 700; font-size: 18px; margin-bottom: 12px;">{section}</div>
-                    <div style="color: #424245; line-height: 1.7; font-size: 15px;">{detail}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            st.markdown('<div class="glass">', unsafe_allow_html=True)
+            st.markdown(f"<div class='h3'>{section}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='help'>{detail}</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
     with tab2:
         source_map = res.get("source_map", {})
         for section, text in res.get("interactive_draft", {}).items():
-            st.markdown(f"### {section}")
+            st.markdown('<div class="glass">', unsafe_allow_html=True)
+            st.markdown(f"<div class='h3'>{section}</div>", unsafe_allow_html=True)
             render_text_with_ref_popovers(text, source_map)
-            st.divider()
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
 else:
     st.markdown(
-        "<br><br><p style='text-align: center; color: #BFBFC3;'>선행연구를 업로드하고 분석을 시작하여 논문 초안을 확인하세요.</p>",
+        """
+        <div class="glass">
+          <div class="card-title">Status</div>
+          <div class="help">선행연구 PDF를 업로드하고 “분석 및 상세 초안 생성”을 실행하면 결과가 여기에 표시됩니다.</div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
-st.markdown(
-    '<p style="text-align: center; color: #D2D2D7; font-size: 12px; margin-top: 50px;">© 2026 Report Mate. Designed for Academic Excellence.</p>',
-    unsafe_allow_html=True,
-)
+st.markdown('<div class="footer">© 2026 Report Mate · Premium UI (Notion/Linear + Lux Dark)</div>', unsafe_allow_html=True)
